@@ -9,7 +9,7 @@ namespace MetadataProcessor
     {
         // Unterstützte Dateiendungen
         private static readonly string[] ImageExtensions = { ".arw", ".gif", ".png", ".jpg", ".jpeg", ".raw" };
-        private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv" };
+        private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv", ".mp" };
 
         /// <summary>
         /// Durchsucht den Root-Ordner rekursiv nach JSON-Dateien, parst sie und verarbeitet die darin angegebenen Mediendateien.
@@ -26,42 +26,64 @@ namespace MetadataProcessor
         private static void ProcessJsonFile(string jsonFile)
         {
             string mediaFileName = ExtractMediaFilePathFromJson(jsonFile);
+            if (mediaFileName is null)
+                return;
             string mediaFilePath = Path.Combine(Path.GetDirectoryName(jsonFile), mediaFileName);
+
+            // Bei Original-Dateien gibt es randomn suffixes, z.B. "original_xyz_I.jpg", oder "original_xyz_L.jpg"
+            if (!File.Exists(mediaFilePath))
+            {
+                // Originaldatei hat gleichen Namen wie json file nur mit suffix - können auch mehrere Dateien sein
+                string mediaFileBase = Path.GetFileNameWithoutExtension(jsonFile);
+                string mediaFileExt = Path.GetExtension(mediaFileName);
+                var dir = Path.GetDirectoryName(jsonFile);
+                var matchingFiles = Directory.EnumerateFiles(dir, mediaFileBase + "*" + mediaFileExt);
+                if (matchingFiles.Any())
+                {
+                    foreach (var file in matchingFiles)
+                    {
+                        ProcessMediaFile(jsonFile, file);
+                    }
+                    mediaFilePath = GetMPFilePath(jsonFile);
+                    if (File.Exists(mediaFilePath))
+                        ProcessMediaFile(jsonFile, mediaFilePath);
+                    // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                    File.Delete(jsonFile);
+                    return;
+                }
+            }
+
             if (string.IsNullOrEmpty(mediaFilePath) || !File.Exists(mediaFilePath))
             {
                 Console.WriteLine("No valid media file found in JSON-File: " + jsonFile);
                 return;
-            }
-            else
+            } else
             {
-                Console.WriteLine($"Processing file {mediaFilePath}");
+                ProcessMediaFile(jsonFile, mediaFilePath);
+                // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                File.Delete(jsonFile);
             }
+        }
 
+        private static void ProcessMediaFile(string jsonFile, string mediaFilePath)
+        {
             double? latitude, longitude, altitude;
-            DateTime? dateTaken = ExtractDateFromJson(jsonFile, out latitude, out longitude, out altitude);
+            DateTime? dateTaken;
+            GetMetadataFromJson(jsonFile, out dateTaken, out latitude, out longitude, out altitude);
             if (dateTaken.HasValue)
             {
                 if (IsImageFile(mediaFilePath))
                 {
-                    if (UpdateImageMetadata(mediaFilePath, dateTaken.Value, latitude, longitude, altitude))
+                    Console.WriteLine($"Processing Image file {mediaFilePath}");
+                    if (SetImageMetadata(mediaFilePath, dateTaken.Value, latitude, longitude, altitude))
                     {
-                        // Wenn die .MP-Datei existiert, auch deren Metadaten aktualisieren  
-                        string mpFilePath = GetMPFilePath(mediaFilePath);
-                        if (!string.IsNullOrEmpty(mpFilePath) && File.Exists(mpFilePath))
-                        {
-                            if (UpdateMPMetadata(mpFilePath, dateTaken.Value))
-                            {
-                                //Console.WriteLine("Metadata updated for MP file: " + mpFilePath);  
-                            }
-                        }
-
-                        // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
-                        File.Delete(jsonFile);
+                        ProcessAdditionalFiles(jsonFile, mediaFilePath);
                     }
                 }
                 else if (IsVideoFile(mediaFilePath))
                 {
-                    if (UpdateVideoMetadata(mediaFilePath, dateTaken.Value))
+                    Console.WriteLine($"Processing Video file {mediaFilePath}");
+                    if (SetVideoMetadata(mediaFilePath, dateTaken.Value))
                         File.Delete(jsonFile);
                 }
             }
@@ -69,6 +91,62 @@ namespace MetadataProcessor
             {
                 Console.WriteLine("No date found in JSON-File for " + mediaFilePath);
             }
+        }
+
+        private static void ProcessAdditionalFiles(string jsonFile, string mediaFilePath)
+        {
+            double? latitude, longitude, altitude;
+            DateTime? dateTaken;
+            GetMetadataFromJson(jsonFile, out dateTaken, out latitude, out longitude, out altitude);
+            // Wenn die .MP-Datei existiert, auch deren Metadaten aktualisieren  
+            string mpFilePath = GetMPFilePath(mediaFilePath);
+            if (!string.IsNullOrEmpty(mpFilePath) && File.Exists(mpFilePath))
+            {
+                if (SetMPMetadata(mpFilePath, dateTaken.Value))
+                {
+                    Console.WriteLine("Metadata updated for MP file: " + mpFilePath);
+                }
+            }
+
+            // Wenn "-edited" existiert, auch deren Metdadaten aktualisieren
+            string editedFilePath = Path.Combine(
+                Path.GetDirectoryName(mediaFilePath),
+                Path.GetFileNameWithoutExtension(mediaFilePath) + "-edited" + Path.GetExtension(mediaFilePath)
+);
+            if (File.Exists(editedFilePath))
+            {
+                if (SetImageMetadata(editedFilePath, dateTaken.Value, latitude, longitude, altitude))
+                {
+                    Console.WriteLine("Metadata updated for edited file: " + editedFilePath);
+                }
+            }
+
+            // Wenn "-bearbeitet" existiert, auch deren Metdadaten aktualisieren
+            string bearbeitetFilePath = Path.Combine(
+                Path.GetDirectoryName(mediaFilePath),
+                Path.GetFileNameWithoutExtension(mediaFilePath) + "-bearbeitet" + Path.GetExtension(mediaFilePath)
+                );
+            if (File.Exists(bearbeitetFilePath))
+            {
+                if (SetImageMetadata(bearbeitetFilePath, dateTaken.Value, latitude, longitude, altitude))
+                {
+                    Console.WriteLine("Metadata updated for bearbeitet file: " + bearbeitetFilePath);
+                }
+            }
+        }
+
+        private static string TryGetOriginalFileName(string jsonFile, string mediaFileName, string mediaFilePath)
+        {
+            string mediaFileBase = Path.GetFileNameWithoutExtension(jsonFile);
+            string mediaFileExt = Path.GetExtension(mediaFileName);
+            var dir = Path.GetDirectoryName(jsonFile);
+            var matchingFiles = Directory.EnumerateFiles(dir, mediaFileBase + "*" + mediaFileExt);
+            if (matchingFiles.Any())
+            {
+                mediaFilePath = matchingFiles.First();
+            }
+
+            return mediaFilePath;
         }
 
         private static bool IsImageFile(string file)
@@ -156,7 +234,7 @@ namespace MetadataProcessor
             return dt;
         }
 
-        private static bool UpdateImageMetadata(string imagePath, DateTime dateTaken, double? latitude, double? longitude, double? altitude)
+        private static bool SetImageMetadata(string imagePath, DateTime dateTaken, double? latitude, double? longitude, double? altitude)
         {
             bool success = true;
             try
@@ -280,8 +358,9 @@ namespace MetadataProcessor
             return result;
         }
 
-        private static DateTime? ExtractDateFromJson(string jsonFile, out double? latitude, out double? longitude, out double? altitude)
+        private static void GetMetadataFromJson(string jsonFile, out DateTime? dateTaken, out double? latitude, out double? longitude, out double? altitude)
         {
+            dateTaken = null;
             latitude = null;
             longitude = null;
             altitude = null;
@@ -310,7 +389,7 @@ namespace MetadataProcessor
                                 altitude = altElement.GetDouble();
                             }
                         }
-                        return UnixTimeStampToDateTime(timestamp);
+                        dateTaken = UnixTimeStampToDateTime(timestamp);
                     }
                 }
             }
@@ -318,7 +397,6 @@ namespace MetadataProcessor
             {
                 Console.WriteLine("Error reading JSON-File " + jsonFile + ": " + ex.Message);
             }
-            return null;
         }
 
         private static string GetMPFilePath(string imagePath)
@@ -327,18 +405,30 @@ namespace MetadataProcessor
             string mediaDir = Path.GetDirectoryName(imagePath);
             string mpFilePath = Path.Combine(mediaDir, mediaFileName);
 
-            // Prüfen, ob die MP-Datei existiert
+            // MP-Datei ohne Extension
             if (File.Exists(mpFilePath))
                 return mpFilePath;
-            // Prüfen, ob die MP4-Datei existiert
-            mpFilePath = Path.ChangeExtension(mpFilePath, ".MP4");
-            if (File.Exists(mpFilePath))
-                return mpFilePath;
+            string searchFilePath;
+            // MP4-Datei
+            searchFilePath = Path.ChangeExtension(mpFilePath, ".MP4");
+            if (File.Exists(searchFilePath))
+                return searchFilePath;
+            // MP-Datei mit Extension
+            searchFilePath = Path.ChangeExtension(mpFilePath, ".MP");
+            if (File.Exists(searchFilePath))
+                return searchFilePath;
+            // MP-Datei mit Extension und PX-Prefix
+            searchFilePath = Path.Combine(mediaDir, mediaFileName + "_PX.MP");
+            if (File.Exists(searchFilePath))
+                return searchFilePath;
+            searchFilePath = Path.Combine(mediaDir, mediaFileName + "PX.MP");
+            if (File.Exists(searchFilePath))
+                return searchFilePath;
 
             return null;
         }
 
-        private static bool UpdateMPMetadata(string mpFilePath, DateTime dateTaken)
+        private static bool SetMPMetadata(string mpFilePath, DateTime dateTaken)
         {
             bool success = true;
             try
@@ -357,7 +447,7 @@ namespace MetadataProcessor
             return success;
         }
 
-        private static bool UpdateVideoMetadata(string videoPath, DateTime dateTaken)
+        private static bool SetVideoMetadata(string videoPath, DateTime dateTaken)
         {
             bool success = true;
             try
