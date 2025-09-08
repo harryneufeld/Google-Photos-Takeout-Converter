@@ -15,9 +15,15 @@ namespace MetadataProcessor
 
         static MediaProcessor()
         {
+            string logFilePath = "failed.log";
+            if (File.Exists(logFilePath))
+            {
+                File.Delete(logFilePath);
+            }
+
             Log.Logger = new LoggerConfiguration()
                 .WriteTo.Console()
-                .WriteTo.File("failed.log", rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Error)
+                .WriteTo.File(logFilePath, rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Error)
                 .CreateLogger();
         }
 
@@ -34,7 +40,7 @@ namespace MetadataProcessor
             {
                 currentFile++;
                 Console.Clear();
-                Console.WriteLine($"Processing file {currentFile} of {totalFiles}");
+                Console.WriteLine($"Processing {currentFile} of {totalFiles} json files");
 
                 try
                 {
@@ -44,6 +50,15 @@ namespace MetadataProcessor
                 {
                     Log.Error(ex, "Error processing file: {FilePath}", jsonFile);
                 }
+            }
+
+            if (File.Exists("failed.log"))
+            {
+                Console.WriteLine("Processing finished with errors. Check the log file at: failed.log");
+            }
+            else
+            {
+                Console.WriteLine("Processing finished successfully with no errors.");
             }
         }
 
