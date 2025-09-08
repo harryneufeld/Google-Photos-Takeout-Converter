@@ -2,13 +2,14 @@
 using System.Drawing.Imaging;
 using System.Runtime.Serialization;
 using System.Text.Json;
+using System.IO;
 
 namespace MetadataProcessor
 {
     public static class MediaProcessor
     {
         // Unterstützte Dateiendungen
-        private static readonly string[] ImageExtensions = { ".arw", ".gif", ".png", ".jpg", ".jpeg", ".raw" };
+        private static readonly string[] ImageExtensions = { ".arw", ".gif", ".png", ".jpg", ".jpeg", ".raw", ".webp" };
         private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv", ".mp" };
 
         /// <summary>
@@ -16,11 +17,31 @@ namespace MetadataProcessor
         /// </summary>
         public static void ProcessRootFolder(string rootFolder)
         {
-            var jsonFiles = Directory.EnumerateFiles(rootFolder, "*.json", SearchOption.AllDirectories);
+            var jsonFiles = Directory.EnumerateFiles(rootFolder, "*.json", SearchOption.AllDirectories).ToList();
+            int totalFiles = jsonFiles.Count;
+            int currentFile = 0;
+
             foreach (string jsonFile in jsonFiles)
             {
-                ProcessJsonFile(jsonFile);
+                currentFile++;
+                Console.Clear();
+                Console.WriteLine($"Processing file {currentFile} of {totalFiles}");
+
+                try
+                {
+                    ProcessJsonFile(jsonFile);
+                }
+                catch (Exception ex)
+                {
+                    LogError(jsonFile, ex);
+                }
             }
+        }
+
+        private static void LogError(string filePath, Exception ex)
+        {
+            string logMessage = $"[{DateTime.Now}] Error processing file: {filePath}\n{ex}\n";
+            File.AppendAllText("error.log", logMessage);
         }
 
         private static void ProcessJsonFile(string jsonFile)
@@ -50,6 +71,21 @@ namespace MetadataProcessor
                     // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
                     File.Delete(jsonFile);
                     return;
+                } else
+                {
+                    // Aber vielleicht gibt es noch diese seltsamen mit Sonderzeichen angereicherten Titel
+                    if (mediaFileBase.Contains("supplemental"))
+                    {
+                        mediaFileBase = mediaFileBase.Substring(0, mediaFileBase.IndexOf(".supplemental"));
+                        mediaFilePath = Path.Combine(dir, mediaFileBase);
+                        if (File.Exists(mediaFilePath))
+                        {
+                            ProcessMediaFile(jsonFile, mediaFilePath);
+                            // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                            File.Delete(jsonFile);
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -74,7 +110,7 @@ namespace MetadataProcessor
             {
                 if (IsImageFile(mediaFilePath))
                 {
-                    Console.WriteLine($"Processing Image file {mediaFilePath}");
+                    //Console.WriteLine($"Processing Image file {mediaFilePath}");
                     if (SetImageMetadata(mediaFilePath, dateTaken.Value, latitude, longitude, altitude))
                     {
                         ProcessAdditionalFiles(jsonFile, mediaFilePath);
@@ -82,7 +118,7 @@ namespace MetadataProcessor
                 }
                 else if (IsVideoFile(mediaFilePath))
                 {
-                    Console.WriteLine($"Processing Video file {mediaFilePath}");
+                    //Console.WriteLine($"Processing Video file {mediaFilePath}");
                     if (SetVideoMetadata(mediaFilePath, dateTaken.Value))
                         File.Delete(jsonFile);
                 }
@@ -104,7 +140,7 @@ namespace MetadataProcessor
             {
                 if (SetMPMetadata(mpFilePath, dateTaken.Value))
                 {
-                    Console.WriteLine("Metadata updated for MP file: " + mpFilePath);
+                    //Console.WriteLine("Metadata updated for MP file: " + mpFilePath);
                 }
             }
 
@@ -117,7 +153,7 @@ namespace MetadataProcessor
             {
                 if (SetImageMetadata(editedFilePath, dateTaken.Value, latitude, longitude, altitude))
                 {
-                    Console.WriteLine("Metadata updated for edited file: " + editedFilePath);
+                    //Console.WriteLine("Metadata updated for edited file: " + editedFilePath);
                 }
             }
 
@@ -130,7 +166,20 @@ namespace MetadataProcessor
             {
                 if (SetImageMetadata(bearbeitetFilePath, dateTaken.Value, latitude, longitude, altitude))
                 {
-                    Console.WriteLine("Metadata updated for bearbeitet file: " + bearbeitetFilePath);
+                    //Console.WriteLine("Metadata updated for bearbeitet file: " + bearbeitetFilePath);
+                }
+            }
+
+            // Wenn eine Kopie "(1)" extistiert, auch deren Metadaten aktualisieren
+            string copyFilePath = Path.Combine(
+                Path.GetDirectoryName(mediaFilePath),
+                Path.GetFileNameWithoutExtension(mediaFilePath) + " (1)" + Path.GetExtension(mediaFilePath)
+                );
+            if (File.Exists(copyFilePath))
+                {
+                if (SetImageMetadata(copyFilePath, dateTaken.Value, latitude, longitude, altitude))
+                {
+                    //Console.WriteLine("Metadata updated for copy file: " + copyFilePath);
                 }
             }
         }
