@@ -3,6 +3,7 @@ using System.Drawing.Imaging;
 using System.Runtime.Serialization;
 using System.Text.Json;
 using System.IO;
+using Serilog;
 
 namespace MetadataProcessor
 {
@@ -11,6 +12,14 @@ namespace MetadataProcessor
         // Unterstützte Dateiendungen
         private static readonly string[] ImageExtensions = { ".arw", ".gif", ".png", ".jpg", ".jpeg", ".raw", ".webp" };
         private static readonly string[] VideoExtensions = { ".mp4", ".mov", ".avi", ".mkv", ".mp" };
+
+        static MediaProcessor()
+        {
+            Log.Logger = new LoggerConfiguration()
+                .WriteTo.Console()
+                .WriteTo.File("failed.log", rollingInterval: RollingInterval.Day, restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Error)
+                .CreateLogger();
+        }
 
         /// <summary>
         /// Durchsucht den Root-Ordner rekursiv nach JSON-Dateien, parst sie und verarbeitet die darin angegebenen Mediendateien.
@@ -33,71 +42,72 @@ namespace MetadataProcessor
                 }
                 catch (Exception ex)
                 {
-                    LogError(jsonFile, ex);
+                    Log.Error(ex, "Error processing file: {FilePath}", jsonFile);
                 }
             }
-        }
-
-        private static void LogError(string filePath, Exception ex)
-        {
-            string logMessage = $"[{DateTime.Now}] Error processing file: {filePath}\n{ex}\n";
-            File.AppendAllText("error.log", logMessage);
         }
 
         private static void ProcessJsonFile(string jsonFile)
         {
-            string mediaFileName = ExtractMediaFilePathFromJson(jsonFile);
-            if (mediaFileName is null)
-                return;
-            string mediaFilePath = Path.Combine(Path.GetDirectoryName(jsonFile), mediaFileName);
-
-            // Bei Original-Dateien gibt es randomn suffixes, z.B. "original_xyz_I.jpg", oder "original_xyz_L.jpg"
-            if (!File.Exists(mediaFilePath))
+            try
             {
-                // Originaldatei hat gleichen Namen wie json file nur mit suffix - können auch mehrere Dateien sein
-                string mediaFileBase = Path.GetFileNameWithoutExtension(jsonFile);
-                string mediaFileExt = Path.GetExtension(mediaFileName);
-                var dir = Path.GetDirectoryName(jsonFile);
-                var matchingFiles = Directory.EnumerateFiles(dir, mediaFileBase + "*" + mediaFileExt);
-                if (matchingFiles.Any())
-                {
-                    foreach (var file in matchingFiles)
-                    {
-                        ProcessMediaFile(jsonFile, file);
-                    }
-                    mediaFilePath = GetMPFilePath(jsonFile);
-                    if (File.Exists(mediaFilePath))
-                        ProcessMediaFile(jsonFile, mediaFilePath);
-                    // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
-                    File.Delete(jsonFile);
+                string mediaFileName = ExtractMediaFilePathFromJson(jsonFile);
+                if (mediaFileName is null)
                     return;
-                } else
+                string mediaFilePath = Path.Combine(Path.GetDirectoryName(jsonFile), mediaFileName);
+
+                // Bei Original-Dateien gibt es randomn suffixes, z.B. "original_xyz_I.jpg", oder "original_xyz_L.jpg"
+                if (!File.Exists(mediaFilePath))
                 {
-                    // Aber vielleicht gibt es noch diese seltsamen mit Sonderzeichen angereicherten Titel
-                    if (mediaFileBase.Contains("supplemental"))
+                    // Originaldatei hat gleichen Namen wie json file nur mit suffix - können auch mehrere Dateien sein
+                    string mediaFileBase = Path.GetFileNameWithoutExtension(jsonFile);
+                    string mediaFileExt = Path.GetExtension(mediaFileName);
+                    var dir = Path.GetDirectoryName(jsonFile);
+                    var matchingFiles = Directory.EnumerateFiles(dir, mediaFileBase + "*" + mediaFileExt);
+                    if (matchingFiles.Any())
                     {
-                        mediaFileBase = mediaFileBase.Substring(0, mediaFileBase.IndexOf(".supplemental"));
-                        mediaFilePath = Path.Combine(dir, mediaFileBase);
-                        if (File.Exists(mediaFilePath))
+                        foreach (var file in matchingFiles)
                         {
+                            ProcessMediaFile(jsonFile, file);
+                        }
+                        mediaFilePath = GetMPFilePath(jsonFile);
+                        if (File.Exists(mediaFilePath))
                             ProcessMediaFile(jsonFile, mediaFilePath);
-                            // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
-                            File.Delete(jsonFile);
-                            return;
+                        // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                        File.Delete(jsonFile);
+                        return;
+                    } else
+                    {
+                        // Aber vielleicht gibt es noch diese seltsamen mit Sonderzeichen angereicherten Titel
+                        if (mediaFileBase.Contains("supplemental"))
+                        {
+                            mediaFileBase = mediaFileBase.Substring(0, mediaFileBase.IndexOf(".supplemental"));
+                            mediaFilePath = Path.Combine(dir, mediaFileBase);
+                            if (File.Exists(mediaFilePath))
+                            {
+                                ProcessMediaFile(jsonFile, mediaFilePath);
+                                // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                                File.Delete(jsonFile);
+                                return;
+                            }
                         }
                     }
                 }
-            }
 
-            if (string.IsNullOrEmpty(mediaFilePath) || !File.Exists(mediaFilePath))
+                if (string.IsNullOrEmpty(mediaFilePath) || !File.Exists(mediaFilePath))
+                {
+                    Log.Warning("No valid media file found in JSON-File: {JsonFile}", jsonFile);
+                    return;
+                } else
+                {
+                    ProcessMediaFile(jsonFile, mediaFilePath);
+                    // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
+                    File.Delete(jsonFile);
+                }
+            }
+            catch (Exception ex)
             {
-                Console.WriteLine("No valid media file found in JSON-File: " + jsonFile);
-                return;
-            } else
-            {
-                ProcessMediaFile(jsonFile, mediaFilePath);
-                // JSON-Datei löschen, nachdem die Metadaten erfolgreich aktualisiert wurden  
-                File.Delete(jsonFile);
+                Log.Error(ex, "Error parsing JSON file: {JsonFile}", jsonFile);
             }
         }
 
@@ -125,7 +135,7 @@ namespace MetadataProcessor
             }
             else
             {
-                Console.WriteLine("No date found in JSON-File for " + mediaFilePath);
+                Log.Warning("No date found in JSON-File for {MediaFilePath}", mediaFilePath);
             }
         }
 
@@ -226,7 +236,7 @@ namespace MetadataProcessor
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error reading JSON-File " + jsonFile + ": " + ex.Message);
+                Log.Error(ex, "Error reading JSON file: {JsonFile}", jsonFile);
             }
             return null;
         }
@@ -249,7 +259,7 @@ namespace MetadataProcessor
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error reading JSON-File " + jsonFile + ": " + ex.Message);
+                Log.Error(ex, "Error reading JSON file: {JsonFile}", jsonFile);
             }
             return null;
         }
@@ -338,7 +348,7 @@ namespace MetadataProcessor
             catch (Exception ex)
             {
                 success = false;
-                Console.WriteLine("Error updating metadata for " + imagePath + ": " + ex.Message);
+                Log.Error(ex, "Error updating metadata for {ImagePath}", imagePath);
             }
             return success;
         }
@@ -444,7 +454,7 @@ namespace MetadataProcessor
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error reading JSON-File " + jsonFile + ": " + ex.Message);
+                Log.Error(ex, "Error reading JSON file: {JsonFile}", jsonFile);
             }
         }
 
@@ -491,7 +501,7 @@ namespace MetadataProcessor
             catch (Exception ex)
             {
                 success = false;
-                Console.WriteLine("Error updating metadata for MP file " + mpFilePath + ": " + ex.Message);
+                Log.Error(ex, "Error updating metadata for MP file {MpFilePath}", mpFilePath);
             }
             return success;
         }
@@ -508,7 +518,7 @@ namespace MetadataProcessor
             catch (Exception ex)
             {
                 success = false;
-                Console.WriteLine("Error updating metadata for " + videoPath + ": " + ex.Message);
+                Log.Error(ex, "Error updating metadata for {VideoPath}", videoPath);
             }
             return success;
         }
